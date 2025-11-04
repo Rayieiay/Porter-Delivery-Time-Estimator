@@ -75,15 +75,6 @@ def main():
     created_dayofweek = day_options.index(selected_day)
     created_is_weekend = 1 if created_dayofweek >= 5 else 0
     
-    # Entry Time
-    base_date = datetime.datetime.now()
-    hypothetical_start_time = base_date.replace(
-        hour=created_hour, 
-        minute=0, 
-        second=0, 
-        microsecond=0
-    )
-    
     # Predict button
     st.markdown("---")
     
@@ -107,8 +98,33 @@ def main():
         }
         
         # Create DataFrame
+        if min_item_price > max_item_price:
+            st.warning("Harga minimum > maksimum. Nilai akan ditukar otomatis.")
+            min_item_price, max_item_price = max_item_price, min_item_price
+
+        if total_busy_partners > total_onshift_partners:
+            st.warning("Busy partners > on-shift partners. Busy akan di-cap ke on-shift.")
+            total_busy_partners = total_onshift_partners
+
         df_input = pd.DataFrame(input_data)
-        
+        if isinstance(feature_info, dict) and 'feature_columns' in feature_info:
+            required_cols = feature_info['feature_columns']
+            # tambahkan kolom yang hilang dengan default 0
+            for col in required_cols:
+                if col not in df_input.columns:
+                    df_input[col] = 0
+            # susun ulang urutan kolom
+            df_input = df_input[required_cols]
+
+            # pastikan tipe numerik/kategorikal sesuai info fitur (jika tersedia)
+            num_cols = feature_info.get('numerical_features', [])
+            cat_cols = feature_info.get('categorical_features', ['store_primary_category'])
+            if num_cols:
+                df_input[num_cols] = df_input[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+            for c in cat_cols:
+                if c in df_input.columns:
+                    df_input[c] = df_input[c].astype('category')
+
         # Make prediction
         try:
             prediction = model.predict(df_input)[0]
@@ -138,8 +154,11 @@ def main():
                 category = "🔴 Lambat"
                 st.error(f"Kategori: {category}")
             
-            # ETA
-            estimated_arrival = hypothetical_start_time + datetime.timedelta(minutes=prediction)
+            # Calculate ETA
+            today = datetime.date.today()
+            base_time = datetime.datetime.combine(today, datetime.time(hour=int(created_hour), minute=0))
+            estimated_arrival = base_time + datetime.timedelta(minutes=float(prediction))
+            st.info(f"🕐 Perkiraan tiba: {estimated_arrival.strftime('%H:%M')}")
             
             # Insights
             st.markdown("**💡 Insights:**")
@@ -158,12 +177,11 @@ def main():
             
             # Summary
             st.markdown("---")
-            # Summary
             st.markdown(f"""
             **📋 Ringkasan:**
             - **Waktu pengiriman:** {prediction:.1f} menit ({prediction/60:.2f} jam)
             - **Kategori:** {category}
-            - **Estimasi tiba (jika pesan jam {created_hour}:00):** {estimated_arrival.strftime('%H:%M')}
+            - **Estimasi tiba:** {estimated_arrival.strftime('%H:%M')}
             - **Hari:** {selected_day} ({'Akhir pekan' if created_is_weekend else 'Hari kerja'})
             - **Jam pemesanan:** {created_hour}:00
             """)

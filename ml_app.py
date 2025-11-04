@@ -179,6 +179,20 @@ def prediction_page(model, feature_info):
                 'created_dayofweek': [created_dayofweek],
                 'created_is_weekend': [created_is_weekend]
             })
+            required_cols = feature_info.get('feature_columns', list(input_data.columns))
+            for col in required_cols:
+                if col not in input_data.columns:
+                    input_data[col] = 0
+            input_data = input_data[required_cols]
+
+            num_cols = feature_info.get('numerical_features', [])
+            cat_cols = feature_info.get('categorical_features', ['store_primary_category'])
+            if num_cols:
+                input_data[num_cols] = input_data[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+            for c in cat_cols:
+                if c in input_data.columns:
+                    input_data[c] = input_data[c].astype('category')
+
             
             # Make prediction
             prediction = model.predict(input_data)[0]
@@ -212,6 +226,14 @@ def predict_quick_scenario(model, scenario_type):
     
     data = scenarios[scenario_type]
     input_df = pd.DataFrame([data])
+    required_cols = getattr(st.session_state, 'feature_columns', None)
+    if required_cols is None and isinstance(feature_info := globals().get('feature_info', None), dict):
+        required_cols = feature_info.get('feature_columns')
+    if required_cols:
+        for col in required_cols:
+            if col not in input_df.columns:
+                input_df[col] = 0
+        input_df = input_df[required_cols]
     prediction = model.predict(input_df)[0]
     
     st.success(f"⚡ {scenario_type.title()} order prediction: **{prediction:.1f} minutes**")
@@ -236,7 +258,10 @@ def display_prediction_result(prediction, input_data):
         st.metric("Category", category)
     
     with col2:
-        eta = datetime.now() + timedelta(minutes=prediction)
+        base_time = datetime.today().replace(
+        hour=int(input_data['created_hour']), minute=0, second=0, microsecond=0
+        )
+        eta = base_time + timedelta(minutes=float(prediction))
         st.metric("ETA", eta.strftime("%H:%M"))
     
     with col3:
@@ -303,6 +328,15 @@ def batch_prediction_page(model, feature_info):
                 st.error(f"❌ Missing columns: {missing_cols}")
             else:
                 if st.button("🚀 Generate Predictions"):
+            
+            num_cols = feature_info.get('numerical_features', [])
+            cat_cols = feature_info.get('categorical_features', ['store_primary_category'])
+            if num_cols:
+                df[num_cols] = df[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+            for c in cat_cols:
+                if c in df.columns:
+                    df[c] = df[c].astype('category')
+
                     # Make predictions
                     predictions = model.predict(df[required_cols])
                     df['predicted_delivery_minutes'] = predictions
