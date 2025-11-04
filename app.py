@@ -75,6 +75,15 @@ def main():
     created_dayofweek = day_options.index(selected_day)
     created_is_weekend = 1 if created_dayofweek >= 5 else 0
     
+    # Entry Time
+    base_date = datetime.datetime.now()
+    hypothetical_start_time = base_date.replace(
+        hour=created_hour, 
+        minute=0, 
+        second=0, 
+        microsecond=0
+    )
+    
     # Predict button
     st.markdown("---")
     
@@ -129,10 +138,8 @@ def main():
                 category = "🔴 Lambat"
                 st.error(f"Kategori: {category}")
             
-            # Calculate ETA
-            now = datetime.datetime.now()
-            estimated_arrival = now + datetime.timedelta(minutes=prediction)
-            st.info(f"🕐 Perkiraan tiba: {estimated_arrival.strftime('%H:%M')}")
+            # ETA
+            estimated_arrival = hypothetical_start_time + datetime.timedelta(minutes=prediction)
             
             # Insights
             st.markdown("**💡 Insights:**")
@@ -151,11 +158,12 @@ def main():
             
             # Summary
             st.markdown("---")
+            # Summary
             st.markdown(f"""
             **📋 Ringkasan:**
             - **Waktu pengiriman:** {prediction:.1f} menit ({prediction/60:.2f} jam)
             - **Kategori:** {category}
-            - **Estimasi tiba:** {estimated_arrival.strftime('%H:%M')}
+            - **Estimasi tiba (jika pesan jam {created_hour}:00):** {estimated_arrival.strftime('%H:%M')}
             - **Hari:** {selected_day} ({'Akhir pekan' if created_is_weekend else 'Hari kerja'})
             - **Jam pemesanan:** {created_hour}:00
             """)
