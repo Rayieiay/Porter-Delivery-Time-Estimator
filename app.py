@@ -1,217 +1,174 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-import pickle
-import warnings
-import datetime
-warnings.filterwarnings('ignore')
+from ml_app import predict_from_partial 
 
-# Set page config
 st.set_page_config(
-    page_title="Porter Delivery Time Estimator",
-    page_icon="🚚",
-    layout="centered"
+    page_title="Porter ETA – Lite",
+    page_icon="⏱️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# Load model function
-@st.cache(allow_output_mutation=True)
-def load_model():
-    """Load the trained model and feature info"""
-    try:
-        with open('porter_delivery_model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        
-        with open('feature_info.pkl', 'rb') as f:
-            feature_info = pickle.load(f)
-            
-        return model, feature_info
-    except FileNotFoundError:
-        st.error("❌ Model files not found!")
-        return None, None
+if not hasattr(st, "divider"):
+    def _divider(*, width="stretch"):
+        st.write("---")
+    st.divider = _divider
 
-def main():
-    st.title("🚚 Porter Delivery Time Estimator")
-    st.markdown("Prediksi waktu pengiriman berdasarkan data pesanan")
-    st.markdown("---")
-    
-    # Load model
-    model, feature_info = load_model()
-    
-    if model is None or feature_info is None:
-        st.stop()
-    
-    # Input form
-    st.subheader("📝 Input Data Pesanan")
-    
-    # Basic Information
-    st.markdown("**📍 Informasi Dasar**")
-    market_id = st.number_input("Market ID", min_value=1, max_value=10, value=2)
-    store_category = st.selectbox(
-        "Kategori Toko", 
-        ['american', 'mexican', 'italian', 'chinese', 'indian', 'unknown']
-    )
-    order_protocol = st.selectbox("Protocol Pesanan", [1.0, 2.0, 3.0])
-    
-    # Order Details
-    st.markdown("**🛒 Detail Pesanan**")
-    total_items = st.number_input("Total Items", min_value=1, max_value=50, value=5)
-    subtotal = st.number_input("Subtotal (dalam cent)", min_value=100, max_value=50000, value=3500)
-    num_distinct_items = st.number_input("Jumlah Item Berbeda", min_value=1, max_value=30, value=4)
-    min_item_price = st.number_input("Harga Item Minimum", min_value=50, max_value=10000, value=500)
-    max_item_price = st.number_input("Harga Item Maximum", min_value=100, max_value=15000, value=1000)
-    
-    # Partner Information
-    st.markdown("**👥 Informasi Partner**")
-    total_onshift_partners = st.number_input("Total Partner On-shift", min_value=1, max_value=100, value=20)
-    total_busy_partners = st.number_input("Total Partner Sibuk", min_value=0, max_value=50, value=10)
-    total_outstanding_orders = st.number_input("Total Pesanan Outstanding", min_value=0, max_value=200, value=15)
-    
-    # Time Information
-    st.markdown("**⏰ Waktu Pesanan**")
-    created_hour = st.slider("Jam Pemesanan (0-23)", 0, 23, 13)
-    
-    day_options = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-    selected_day = st.selectbox("Hari dalam Minggu", day_options)
-    created_dayofweek = day_options.index(selected_day)
-    created_is_weekend = 1 if created_dayofweek >= 5 else 0
-    
-    # Predict button
-    st.markdown("---")
-    
-    if st.button("🔮 Prediksi Waktu Pengiriman"):
-        # Prepare input data
-        input_data = {
-            'market_id': [market_id],
-            'store_primary_category': [store_category],
-            'order_protocol': [order_protocol],
-            'total_items': [total_items],
-            'subtotal': [subtotal],
-            'num_distinct_items': [num_distinct_items],
-            'min_item_price': [min_item_price],
-            'max_item_price': [max_item_price],
-            'total_onshift_partners': [total_onshift_partners],
-            'total_busy_partners': [total_busy_partners],
-            'total_outstanding_orders': [total_outstanding_orders],
-            'created_hour': [created_hour],
-            'created_dayofweek': [created_dayofweek],
-            'created_is_weekend': [created_is_weekend]
+def inject_css():
+    st.markdown(
+        """
+        <style>
+        [data-testid="stHeader"] { background: transparent; }
+
+        [data-testid="stSidebar"] {
+          background: rgba(15,17,26,.96) !important;
+          backdrop-filter: blur(6px);
+          border-right: 1px solid rgba(255,255,255,.06);
         }
-        
-        # Create DataFrame
-        if min_item_price > max_item_price:
-            st.warning("Harga minimum > maksimum. Nilai akan ditukar otomatis.")
-            min_item_price, max_item_price = max_item_price, min_item_price
 
-        if total_busy_partners > total_onshift_partners:
-            st.warning("Busy partners > on-shift partners. Busy akan di-cap ke on-shift.")
-            total_busy_partners = total_onshift_partners
+        [data-testid="stAppViewContainer"] {
+          background: radial-gradient(1100px 650px at 20% 15%, #101827 0%, #0b1220 40%, #070b15 100%) fixed;
+        }
 
-        df_input = pd.DataFrame(input_data)
-        if isinstance(feature_info, dict) and 'feature_columns' in feature_info:
-            required_cols = feature_info['feature_columns']
-            # tambahkan kolom yang hilang dengan default 0
-            for col in required_cols:
-                if col not in df_input.columns:
-                    df_input[col] = 0
-            # susun ulang urutan kolom
-            df_input = df_input[required_cols]
+        /* Typography */
+        h1, h2, h3, h4, h5, h6 { color: #e8e9ee !important; letter-spacing: .2px; }
+        p, label, .stText, .stMarkdown, .stMetric { color: #cbd5e1 !important; }
 
-            # pastikan tipe numerik/kategorikal sesuai info fitur (jika tersedia)
-            num_cols = feature_info.get('numerical_features', [])
-            cat_cols = feature_info.get('categorical_features', ['store_primary_category'])
-            if num_cols:
-                df_input[num_cols] = df_input[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-            for c in cat_cols:
-                if c in df_input.columns:
-                    df_input[c] = df_input[c].astype('category')
+        /* Card */
+        .card {
+          border-radius: 14px;
+          padding: 1rem 1.25rem;
+          background: linear-gradient(180deg, rgba(17,24,39,.85) 0%, rgba(11,18,32,.85) 100%);
+          border: 1px solid rgba(148,163,184,.18);
+          box-shadow: 0 10px 24px rgba(2,6,23,.35);
+        }
 
-        # Make prediction
-        try:
-            prediction = model.predict(df_input)[0]
-            
-            # Display results
-            st.success("✅ Prediksi Berhasil!")
-            
-            # Main result
-            st.markdown(f"""
-            <div style='background-color: #e1f5fe; padding: 20px; border-radius: 10px; text-align: center;'>
-                <h2 style='color: #0277bd;'>🎯 Hasil Prediksi</h2>
-                <h1 style='color: #01579b;'>{prediction:.1f} menit</h1>
-                <p style='color: #0288d1;'>≈ {prediction/60:.1f} jam</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.markdown("---")
-            
-            # Additional information
-            if prediction <= 30:
-                category = "🟢 Cepat"
-                st.success(f"Kategori: {category}")
-            elif prediction <= 60:
-                category = "🟡 Normal"
-                st.warning(f"Kategori: {category}")
-            else:
-                category = "🔴 Lambat"
-                st.error(f"Kategori: {category}")
-            
-            # Calculate ETA
-            today = datetime.date.today()
-            base_time = datetime.datetime.combine(today, datetime.time(hour=int(created_hour), minute=0))
-            estimated_arrival = base_time + datetime.timedelta(minutes=float(prediction))
-            st.info(f"🕐 Perkiraan tiba: {estimated_arrival.strftime('%H:%M')}")
-            
-            # Insights
-            st.markdown("**💡 Insights:**")
-            
-            if total_busy_partners > total_onshift_partners * 0.7:
-                st.warning("⚠️ Banyak partner yang sibuk, mungkin akan mempengaruhi waktu pengiriman")
-            
-            if total_outstanding_orders > 50:
-                st.warning("📈 Pesanan outstanding tinggi, kemungkinan ada delay")
-            
-            if created_is_weekend:
-                st.info("🎉 Pesanan di akhir pekan, pola pengiriman mungkin berbeda")
-            
-            if created_hour < 8 or created_hour > 22:
-                st.info("🌙 Pesanan di luar jam normal, waktu pengiriman mungkin lebih lama")
-            
-            # Summary
-            st.markdown("---")
-            st.markdown(f"""
-            **📋 Ringkasan:**
-            - **Waktu pengiriman:** {prediction:.1f} menit ({prediction/60:.2f} jam)
-            - **Kategori:** {category}
-            - **Estimasi tiba:** {estimated_arrival.strftime('%H:%M')}
-            - **Hari:** {selected_day} ({'Akhir pekan' if created_is_weekend else 'Hari kerja'})
-            - **Jam pemesanan:** {created_hour}:00
-            """)
-            
-        except Exception as e:
-            st.error(f"❌ Error dalam prediksi: {str(e)}")
-            st.error("Pastikan semua input sudah diisi dengan benar.")
-    
-    # Information section
+        /* Tombol */
+        .stButton>button {
+          border-radius: 10px;
+          padding: .65rem 1rem;
+          font-weight: 600;
+          border: 1px solid rgba(255,255,255,.15);
+          background: linear-gradient(180deg, #243b55, #141e30);
+          color: #eef2ff;
+        }
+        .stButton>button:hover { filter: brightness(1.08); border-color: rgba(255,255,255,.25); }
+
+        /* Input */
+        div[data-baseweb="input"] input, .stSelectbox [data-baseweb="select"] {
+          background: rgba(148,163,184,.08);
+          color: #e5e7eb;
+        }
+        label[for] { margin-bottom: .2rem; font-weight: 500; }
+
+        /* HR */
+        hr { border: 0; border-top: 1px solid rgba(148,163,184,.25); margin: .75rem 0; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+inject_css()
+
+#Header
+st.markdown(
+    """
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:2px;">
+      <div style="font-size:28px">⏱️</div>
+      <div>
+        <h1 style="margin:0;">Porter Delivery Time Estimation</h1>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+#Sidebar
+with st.sidebar:
+    st.markdown("### ⚙️ Pengaturan")
+    st.caption("Fitur turunan & default dihasilkan otomatis di backend.")
     st.markdown("---")
-    st.subheader("ℹ️ Informasi")
-    
-    st.info("""
-    **Model yang Digunakan:**
-    - Linear Regression dengan Pipeline
-    - Preprocessing: StandardScaler + OneHotEncoder
-    - 14 fitur input (13 numerical + 1 categorical)
-    """)
-    
-    st.info("""
-    **Cara Penggunaan:**
-    1. Isi semua field input yang tersedia
-    2. Pastikan nilai-nilai masuk akal dan realistis
-    3. Klik tombol "Prediksi Waktu Pengiriman"
-    4. Lihat hasil prediksi dan insights yang diberikan
-    """)
-    
-    # Footer
+    st.markdown(
+        """
+        **Tips input**  
+        • `created_dayofweek`: 0=Mon … 6=Sun  
+        • `created_hour`: 0–23  
+        • Pastikan angka partner & order ≥ 0
+        """
+    )
     st.markdown("---")
-    st.markdown("🚚 **Porter Delivery Time Estimator** | Dikembangkan oleh Kelompok 4")
 
-if __name__ == "__main__":
-    main()
+#Form
+st.markdown("#### Input Semua Kolom yang Tersedia")
+
+with st.form("lite_form"):
+    c1, c2, c3, out = st.columns([1, 1, 1, 1.25])
+
+    with c1:
+        order_protocol = st.selectbox("order_protocol", [1, 2, 3, 4, 5], index=0)
+        market_id = st.selectbox("market_id", [1, 2, 3, 4, 5, 6], index=0)
+        total_items = st.number_input("total_items", min_value=0, value=3, step=1)
+
+    with c2:
+        subtotal = st.number_input("subtotal", min_value=0.0, value=150000.0, step=1000.0)
+        created_hour = st.number_input("created_hour (0–23)", min_value=0, max_value=23, value=12, step=1)
+        created_dayofweek = st.number_input("created_dayofweek (0=Mon..6=Sun)", min_value=0, max_value=6, value=2, step=1)
+
+    with c3:
+        total_onshift_partners = st.number_input("total_onshift_partners", min_value=0, value=100, step=1)
+        total_busy_partners = st.number_input("total_busy_partners", min_value=0, value=60, step=1)
+        total_outstanding_orders = st.number_input("total_outstanding_orders", min_value=0, value=50, step=1)
+
+        submit = st.form_submit_button("🔮 Prediksi ETA")
+
+    #eta
+    if submit:
+        features = dict(
+            order_protocol=order_protocol,
+            market_id=market_id,
+            total_items=total_items,
+            subtotal=subtotal,
+            created_hour=created_hour,
+            created_dayofweek=created_dayofweek,
+            total_onshift_partners=total_onshift_partners,
+            total_busy_partners=total_busy_partners,
+            total_outstanding_orders=total_outstanding_orders,
+        )
+        eta = predict_from_partial(features)
+        st.session_state["eta_minutes"] = float(eta)
+        st.session_state["features"] = features
+
+    #hasil
+    with out:
+        if "eta_minutes" not in st.session_state:
+            st.metric("Estimasi waktu antar (menit)", "—")
+            st.caption("Isi form lalu klik **Prediksi ETA**.")
+        else:
+            st.metric("Estimasi waktu antar (menit)", round(st.session_state["eta_minutes"], 2))
+
+            f = st.session_state["features"]
+            top = max(int(f["total_onshift_partners"]), 0)
+            tbp = max(int(f["total_busy_partners"]), 0)
+            too = max(int(f["total_outstanding_orders"]), 0)
+            available = max(top - tbp, 0)
+            busy_ratio = (tbp / top) if top > 0 else 0.0
+            opp = (too / available) if available > 0 else 0.0
+            dsr = (too / top) if top > 0 else 0.0
+            api = (float(f["subtotal"]) / max(int(f["total_items"]), 1)) if int(f["total_items"]) > 0 else 0.0
+
+            st.markdown("<hr/>", unsafe_allow_html=True)
+            st.caption("**Ringkasan operasional (turunan dari input):**")
+            st.markdown(
+                f"""
+                • **Available partners**: {available}  
+                • **Busy ratio**: {busy_ratio:.2f}  
+                • **Order / partner**: {opp:.2f}  
+                • **Demand/Supply ratio**: {dsr:.2f}  
+                • **Avg price / item**: {api:.0f}  
+                • **Created (H, DOW)**: {f["created_hour"]}, {f["created_dayofweek"]}
+                """
+            )
+            st.caption("Angka-angka di atas hanya visualisasi; pipeline tetap memakai input Lite.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+#footer
+st.markdown("<br/>", unsafe_allow_html=True)

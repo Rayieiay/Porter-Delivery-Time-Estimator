@@ -1,455 +1,165 @@
-import streamlit as st
+# ml_app.py
+import joblib
 import pandas as pd
-import numpy as np
-import pickle
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from typing import List, Tuple, Dict, Any
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-# Page configuration
-st.set_page_config(
-    page_title="Porter ML Dashboard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+MODEL_PATH = "XGBoost_Optuna.joblib"
+CAT_COLS = ["order_protocol", "market_id", "time_category"]  # konsisten seperti training
 
-# Custom CSS
-st.markdown("""
-<style>
-.main-header {
-    font-size: 3rem;
-    color: #1f77b4;
-    text-align: center;
-    margin-bottom: 2rem;
-}
-.metric-card {
-    background-color: #f0f2f6;
-    padding: 1rem;
-    border-radius: 0.5rem;
-    margin: 0.5rem 0;
-}
-.prediction-result {
-    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 2rem;
-    border-radius: 1rem;
-    text-align: center;
-    margin: 1rem 0;
-}
-</style>
-""", unsafe_allow_html=True)
+# -------------------- LOADING --------------------
+def load_pipeline(path: str = MODEL_PATH):
+    """
+    Memuat pipeline (sklearn Pipeline) dari joblib.
+    Tidak mengubah perilaku; hanya pembungkus sederhana.
+    """
+    return joblib.load(path)
 
-# Load model with caching for older versions
-@st.cache(allow_output_mutation=True)
-def load_model_and_features():
-    """Load model and feature information"""
-    try:
-        with open('porter_delivery_model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        
-        with open('feature_info.pkl', 'rb') as f:
-            feature_info = pickle.load(f)
-            
-        return model, feature_info
-    except FileNotFoundError:
-        return None, None
+# -------------------- SCHEMA --------------------
+def _find_ct(pipe) -> ColumnTransformer:
+    """
+    Temukan ColumnTransformer di dalam pipeline.
+    """
+    for _, step in getattr(pipe, "named_steps", {}).items():
+        if isinstance(step, ColumnTransformer):
+            return step
+    for _, step in getattr(pipe, "steps", []):
+        if isinstance(step, ColumnTransformer):
+            return step
+    raise RuntimeError("ColumnTransformer tidak ditemukan di pipeline.")
 
-def create_sample_data():
-    """Create sample data for testing"""
-    return {
-        'market_id': 2,
-        'store_primary_category': 'american',
-        'order_protocol': 1.0,
-        'total_items': 5,
-        'subtotal': 3500,
-        'num_distinct_items': 4,
-        'min_item_price': 500,
-        'max_item_price': 1000,
-        'total_onshift_partners': 20,
-        'total_busy_partners': 10,
-        'total_outstanding_orders': 15,
-        'created_hour': 13,
-        'created_dayofweek': 2,
-        'created_is_weekend': 0
-    }
+def get_expected_columns(pipe) -> List[str]:
+    """
+    Mengembalikan daftar kolom mentah yang diharapkan (schema training).
+    """
+    ct = _find_ct(pipe)
+    if hasattr(ct, "feature_names_in_"):
+        return list(ct.feature_names_in_)
+    raise RuntimeError("feature_names_in_ tidak tersedia pada ColumnTransformer.")
 
-def main():
-    # Header
-    st.markdown('<h1 class="main-header">🚚 Porter Delivery ML Dashboard</h1>', unsafe_allow_html=True)
-    
-    # Load model
-    model, feature_info = load_model_and_features()
-    
-    if model is None:
-        st.error("❌ Model tidak ditemukan! Pastikan file model ada di direktori yang sama.")
-        st.stop()
-    
-    # Sidebar navigation
-    st.sidebar.title("🧭 Navigation")
-    page = st.sidebar.selectbox(
-        "Pilih Halaman",
-        ["🔮 Prediksi", "📊 Batch Prediction", "📈 Model Analysis", "ℹ️ About"]
-    )
-    
-    if page == "🔮 Prediksi":
-        prediction_page(model, feature_info)
-    elif page == "📊 Batch Prediction":
-        batch_prediction_page(model, feature_info)
-    elif page == "📈 Model Analysis":
-        model_analysis_page(model, feature_info)
-    else:
-        about_page()
+def ensure_schema(df: pd.DataFrame, expected_cols: List[str]) -> pd.DataFrame:
+    """
+    Memastikan DataFrame memiliki kolom lengkap sesuai schema training.
+    """
+    missing = [c for c in expected_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Kolom wajib hilang: {missing}")
+    return df[expected_cols]
 
-def prediction_page(model, feature_info):
-    """Single prediction page"""
-    st.header("🔮 Prediksi Waktu Pengiriman")
-    
-    # Quick prediction buttons
-    st.subheader("⚡ Quick Predictions")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("🍔 Fast Food Order"):
-            predict_quick_scenario(model, 'fast_food')
-    
-    with col2:
-        if st.button("🍕 Regular Order"):
-            predict_quick_scenario(model, 'regular')
-    
-    with col3:
-        if st.button("🥘 Large Order"):
-            predict_quick_scenario(model, 'large')
-    
-    st.markdown("---")
-    
-    # Manual input section
-    st.subheader("🎛️ Custom Prediction")
-    
-    # Input form
-    with st.form("prediction_form"):
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("**📍 Location & Store**")
-            market_id = st.number_input("Market ID", 1, 10, 2)
-            store_category = st.selectbox(
-                "Store Category",
-                ['american', 'mexican', 'italian', 'chinese', 'indian', 'unknown']
-            )
-            order_protocol = st.selectbox("Order Protocol", [1.0, 2.0, 3.0])
-        
-        with col2:
-            st.markdown("**🛒 Order Details**")
-            total_items = st.number_input("Total Items", 1, 50, 5)
-            subtotal = st.number_input("Subtotal", 100, 50000, 3500)
-            num_distinct_items = st.number_input("Distinct Items", 1, 30, 4)
-            min_item_price = st.number_input("Min Item Price", 50, 10000, 500)
-            max_item_price = st.number_input("Max Item Price", 100, 15000, 1000)
-        
-        with col3:
-            st.markdown("**👥 Partner Info**")
-            total_onshift_partners = st.number_input("Onshift Partners", 1, 100, 20)
-            total_busy_partners = st.number_input("Busy Partners", 0, 50, 10)
-            total_outstanding_orders = st.number_input("Outstanding Orders", 0, 200, 15)
-            
-            st.markdown("**⏰ Time Info**")
-            created_hour = st.slider("Hour of Day", 0, 23, 13)
-            created_dayofweek = st.selectbox("Day of Week", list(range(7)), format_func=lambda x: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][x])
-        
-        submitted = st.form_submit_button("🚀 Predict Delivery Time")
-        
-        if submitted:
-            # Prepare data
-            created_is_weekend = 1 if created_dayofweek >= 5 else 0
-            
-            input_data = pd.DataFrame({
-                'market_id': [market_id],
-                'store_primary_category': [store_category],
-                'order_protocol': [order_protocol],
-                'total_items': [total_items],
-                'subtotal': [subtotal],
-                'num_distinct_items': [num_distinct_items],
-                'min_item_price': [min_item_price],
-                'max_item_price': [max_item_price],
-                'total_onshift_partners': [total_onshift_partners],
-                'total_busy_partners': [total_busy_partners],
-                'total_outstanding_orders': [total_outstanding_orders],
-                'created_hour': [created_hour],
-                'created_dayofweek': [created_dayofweek],
-                'created_is_weekend': [created_is_weekend]
-            })
-            required_cols = feature_info.get('feature_columns', list(input_data.columns))
-            for col in required_cols:
-                if col not in input_data.columns:
-                    input_data[col] = 0
-            input_data = input_data[required_cols]
+# -------------------- PREDIKSI (SCHEMA PENUH) --------------------
+def predict_df(df: pd.DataFrame) -> pd.Series:
+    """
+    Prediksi dengan schema penuh (22 fitur).
+    - Menjaga tipe kategorikal untuk OHE.
+    - Menggunakan pipeline yang sama persis seperti training.
+    """
+    pipe = load_pipeline()
+    expected = get_expected_columns(pipe)
+    X = ensure_schema(df, expected)
+    # pastikan tipe kategori
+    cat_present = [c for c in CAT_COLS if c in X.columns]
+    if cat_present:
+        X[cat_present] = X[cat_present].astype("category")
+    return pd.Series(pipe.predict(X), index=X.index, name="eta_minutes")
 
-            num_cols = feature_info.get('numerical_features', [])
-            cat_cols = feature_info.get('categorical_features', ['store_primary_category'])
-            if num_cols:
-                input_data[num_cols] = input_data[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-            for c in cat_cols:
-                if c in input_data.columns:
-                    input_data[c] = input_data[c].astype('category')
+# -------------------- UTILITIES UNTUK MODE LITE --------------------
+def _introspect_cols(ct: ColumnTransformer) -> Tuple[list, list, StandardScaler, OneHotEncoder]:
+    """
+    Mengidentifikasi kolom numerik/kategorikal serta estimator (StandardScaler/OneHotEncoder).
+    """
+    num_cols, cat_cols = [], []
+    num_scaler = None
+    ohe = None
+    for _, trans, cols in ct.transformers_:
+        if trans is None or cols is None:
+            continue
+        final = trans.steps[-1][1] if hasattr(trans, "steps") else trans
+        if isinstance(final, StandardScaler):
+            num_cols = list(cols); num_scaler = final
+        elif isinstance(final, OneHotEncoder):
+            cat_cols = list(cols); ohe = final
+    return num_cols, cat_cols, num_scaler, ohe
 
-            
-            # Make prediction
-            prediction = model.predict(input_data)[0]
-            display_prediction_result(prediction, input_data.iloc[0])
+def build_defaults_from_model(pipe) -> Tuple[Dict[str, Any], list, list]:
+    """
+    Menyusun default value dari preprocessor (mean numerik + kategori jangkar).
+    """
+    ct = _find_ct(pipe)
+    num_cols, cat_cols, num_scaler, ohe = _introspect_cols(ct)
+    defaults: Dict[str, Any] = {}
 
-def predict_quick_scenario(model, scenario_type):
-    """Quick prediction for predefined scenarios"""
-    scenarios = {
-        'fast_food': {
-            'market_id': 1, 'store_primary_category': 'american', 'order_protocol': 3.0,
-            'total_items': 2, 'subtotal': 1500, 'num_distinct_items': 2,
-            'min_item_price': 500, 'max_item_price': 1000, 'total_onshift_partners': 25,
-            'total_busy_partners': 5, 'total_outstanding_orders': 10,
-            'created_hour': 12, 'created_dayofweek': 2, 'created_is_weekend': 0
-        },
-        'regular': {
-            'market_id': 2, 'store_primary_category': 'italian', 'order_protocol': 2.0,
-            'total_items': 5, 'subtotal': 3500, 'num_distinct_items': 4,
-            'min_item_price': 400, 'max_item_price': 1200, 'total_onshift_partners': 20,
-            'total_busy_partners': 12, 'total_outstanding_orders': 18,
-            'created_hour': 19, 'created_dayofweek': 4, 'created_is_weekend': 0
-        },
-        'large': {
-            'market_id': 3, 'store_primary_category': 'chinese', 'order_protocol': 1.0,
-            'total_items': 12, 'subtotal': 8500, 'num_distinct_items': 8,
-            'min_item_price': 300, 'max_item_price': 2000, 'total_onshift_partners': 15,
-            'total_busy_partners': 18, 'total_outstanding_orders': 35,
-            'created_hour': 20, 'created_dayofweek': 5, 'created_is_weekend': 1
-        }
-    }
-    
-    data = scenarios[scenario_type]
-    input_df = pd.DataFrame([data])
-    required_cols = getattr(st.session_state, 'feature_columns', None)
-    if required_cols is None and isinstance(feature_info := globals().get('feature_info', None), dict):
-        required_cols = feature_info.get('feature_columns')
-    if required_cols:
-        for col in required_cols:
-            if col not in input_df.columns:
-                input_df[col] = 0
-        input_df = input_df[required_cols]
-    prediction = model.predict(input_df)[0]
-    
-    st.success(f"⚡ {scenario_type.title()} order prediction: **{prediction:.1f} minutes**")
+    if num_scaler is not None and hasattr(num_scaler, "mean_"):
+        for col, mu in zip(num_cols, num_scaler.mean_):
+            defaults[col] = float(mu)
 
-def display_prediction_result(prediction, input_data):
-    """Display prediction results with visualization"""
-    
-    # Main result
-    st.markdown(f"""
-    <div class="prediction-result">
-        <h2>🎯 Prediction Result</h2>
-        <h1>{prediction:.1f} minutes</h1>
-        <p>≈ {prediction/60:.1f} hours</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Metrics row
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        category = "🟢 Fast" if prediction <= 30 else "🟡 Normal" if prediction <= 60 else "🔴 Slow"
-        st.metric("Category", category)
-    
-    with col2:
-        base_time = datetime.today().replace(
-        hour=int(input_data['created_hour']), minute=0, second=0, microsecond=0
-        )
-        eta = base_time + timedelta(minutes=float(prediction))
-        st.metric("ETA", eta.strftime("%H:%M"))
-    
-    with col3:
-        confidence = "High" if 20 <= prediction <= 80 else "Medium"
-        st.metric("Confidence", confidence)
-    
-    with col4:
-        rush_hour = "Yes" if input_data['created_hour'] in [11, 12, 13, 18, 19, 20] else "No"
-        st.metric("Rush Hour", rush_hour)
-    
-    # Visualization
-    create_prediction_chart(prediction)
+    if ohe is not None and hasattr(ohe, "categories_"):
+        for col, cats in zip(cat_cols, ohe.categories_):
+            defaults[col] = cats[0] if len(cats) else None
 
-def create_prediction_chart(prediction):
-    """Create a gauge chart for prediction"""
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number+delta",
-        value = prediction,
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': "Delivery Time (minutes)"},
-        delta = {'reference': 45},
-        gauge = {
-            'axis': {'range': [None, 120]},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, 30], 'color': "lightgreen"},
-                {'range': [30, 60], 'color': "yellow"},
-                {'range': [60, 120], 'color': "lightcoral"}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': 90
-            }
-        }
-    ))
-    
-    fig.update_layout(height=400)
-    st.plotly_chart(fig, use_container_width=True)
+    return defaults, num_cols, cat_cols
 
-def batch_prediction_page(model, feature_info):
-    """Batch prediction page"""
-    st.header("📊 Batch Predictions")
-    
-    st.info("Upload a CSV file with the required columns to get predictions for multiple orders.")
-    
-    # File uploader
-    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
-    
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            st.success("✅ File uploaded successfully!")
-            
-            # Show preview
-            st.subheader("📋 Data Preview")
-            st.dataframe(df.head())
-            
-            # Check required columns
-            required_cols = feature_info['feature_columns']
-            missing_cols = [col for col in required_cols if col not in df.columns]
-            
-            if missing_cols:
-                st.error(f"❌ Missing columns: {missing_cols}")
-            else:
-                if st.button("🚀 Generate Predictions"):
-            
-            num_cols = feature_info.get('numerical_features', [])
-            cat_cols = feature_info.get('categorical_features', ['store_primary_category'])
-            if num_cols:
-                df[num_cols] = df[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-            for c in cat_cols:
-                if c in df.columns:
-                    df[c] = df[c].astype('category')
+def _derive_features(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Menghitung fitur turunan dari 9 input inti (tanpa mengubah logika yang sudah dideskripsikan sebelumnya).
+    """
+    top = max(int(row.get("total_onshift_partners", 0)), 0)
+    tbp = max(int(row.get("total_busy_partners", 0)), 0)
+    too = max(int(row.get("total_outstanding_orders", 0)), 0)
 
-                    # Make predictions
-                    predictions = model.predict(df[required_cols])
-                    df['predicted_delivery_minutes'] = predictions
-                    df['predicted_delivery_hours'] = predictions / 60
-                    
-                    # Show results
-                    st.subheader("📈 Prediction Results")
-                    st.dataframe(df)
-                    
-                    # Summary statistics
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Average Delivery Time", f"{predictions.mean():.1f} min")
-                    
-                    with col2:
-                        st.metric("Median Delivery Time", f"{np.median(predictions):.1f} min")
-                    
-                    with col3:
-                        st.metric("Max Delivery Time", f"{predictions.max():.1f} min")
-                    
-                    # Download results
-                    csv = df.to_csv(index=False)
-                    st.download_button(
-                        label="💾 Download Results",
-                        data=csv,
-                        file_name="predictions.csv",
-                        mime="text/csv"
-                    )
-        
-        except Exception as e:
-            st.error(f"❌ Error processing file: {str(e)}")
-    
-    # Sample data
-    st.subheader("📝 Sample Data Format")
-    sample_data = create_sample_data()
-    sample_df = pd.DataFrame([sample_data])
-    st.dataframe(sample_df)
+    available = max(top - tbp, 0)
+    row["available_partners"] = available
+    row["busy_ratio"] = (tbp / top) if top > 0 else 0.0
+    row["order_per_partner"] = (too / available) if available > 0 else 0.0
+    row["demand_supply_ratio"] = (too / top) if top > 0 else 0.0
 
-def model_analysis_page(model, feature_info):
-    """Model analysis page"""
-    st.header("📈 Model Analysis")
-    
-    # Model information
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🤖 Model Details")
-        st.info("""
-        **Model Type:** Linear Regression Pipeline
-        **Preprocessing:** StandardScaler + OneHotEncoder
-        **Features:** 14 total (13 numerical + 1 categorical)
-        """)
-        
-        st.subheader("📊 Feature List")
-        st.write("**Numerical Features:**")
-        for feature in feature_info['numerical_features']:
-            st.write(f"- {feature}")
-        
-        st.write("**Categorical Features:**")
-        for feature in feature_info['categorical_features']:
-            st.write(f"- {feature}")
-    
-    with col2:
-        st.subheader("🎯 Model Performance")
-        st.warning("""
-        **Note:** This is a demo model trained on synthetic data.
-        For production use, train with real historical data.
-        """)
-        
-        st.subheader("💡 Model Insights")
-        st.info("""
-        **Key Factors Affecting Delivery Time:**
-        - Number of busy partners
-        - Total outstanding orders
-        - Time of day (rush hours)
-        - Weekend vs weekday
-        - Order size and complexity
-        """)
+    ti = max(int(row.get("total_items", 0)), 0)
+    subtotal = float(row.get("subtotal", 0.0))
+    row["avg_price_per_item"] = (subtotal / ti) if ti > 0 else 0.0
+    row["is_single_item"] = int(ti == 1)
 
-def about_page():
-    """About page"""
-    st.header("ℹ️ About Porter Delivery Time Estimator")
-    
-    st.markdown("""
-    ## 🎯 Purpose
-    This application predicts delivery times for Porter orders based on various factors including:
-    - Order characteristics (items, price, etc.)
-    - Partner availability
-    - Time factors
-    - Market conditions
-    
-    ## 🔧 Technology Stack
-    - **Frontend:** Streamlit
-    - **ML Model:** Scikit-learn Linear Regression
-    - **Data Processing:** Pandas, NumPy
-    - **Visualization:** Plotly
-    
-    ## 📊 Model Features
-    The model uses 14 features to predict delivery time:
-    - Market and store information
-    - Order details (items, prices)
-    - Partner availability
-    - Time-based features
-    
-    ## ⚠️ Important Notes
-    - This is a demonstration model trained on synthetic data
-    - For production use, retrain with real historical delivery data
-    - Predictions should be validated against actual delivery times
-    
-    ## 👥 Team
-    Developed by Kelompok 4 for Porter Delivery Time Estimation Project
-    """)
+    dow = int(row.get("created_dayofweek", 0))
+    row["is_weekend"] = int(dow in {5, 6})
 
-if __name__ == "__main__":
-    main()
+    # time_category fallback (pastikan konsisten dengan training)
+    if not row.get("time_category"):
+        hour = int(row.get("created_hour", 0))
+        if   5 <= hour <= 10: row["time_category"] = "morning"
+        elif 11 <= hour <= 15: row["time_category"] = "afternoon"
+        elif 16 <= hour <= 20: row["time_category"] = "evening"
+        else: row["time_category"] = "night"
+
+    return row
+
+def adapt_partial_to_full(partial: Dict[str, Any], pipe) -> pd.DataFrame:
+    """
+    Mengonversi input parsial (9 input) menjadi DataFrame lengkap (22 fitur) sesuai schema training.
+    - Mulai dari default berbasis preprocessor
+    - Timpa dengan input user
+    - Hitung fitur turunan
+    - Kembalikan DataFrame berurutan sesuai feature_names_in_
+    """
+    defaults, _, cat_cols = build_defaults_from_model(pipe)
+    row = dict(defaults)
+    row.update({k: v for k, v in partial.items() if v is not None})
+    row = _derive_features(row)
+
+    ct = _find_ct(pipe)
+    expected = list(ct.feature_names_in_) if hasattr(ct, "feature_names_in_") else list(row.keys())
+    df = pd.DataFrame([{c: row.get(c, None) for c in expected}])
+
+    cat_present = [c for c in cat_cols if c in df.columns]
+    if cat_present:
+        df[cat_present] = df[cat_present].astype("category")
+    return df[expected]
+
+# -------------------- PREDIKSI (MODE LITE) --------------------
+def predict_from_partial(partial: Dict[str, Any]) -> float:
+    """
+    Prediksi dari input minimal (mode Lite).
+    Menggunakan fungsi adaptasi sehingga pipeline menerima schema lengkap.
+    """
+    pipe = load_pipeline()
+    X = adapt_partial_to_full(partial, pipe)
+    y = pipe.predict(X)
+    return float(y[0])
