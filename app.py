@@ -2,7 +2,7 @@ import streamlit as st
 from ml_app import predict_from_partial 
 
 st.set_page_config(
-    page_title="Porter ETA – Lite",
+    page_title="Porter ETA",
     page_icon="⏱️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -85,7 +85,6 @@ st.markdown(
 #Sidebar
 with st.sidebar:
     st.markdown("### ⚙️ Pengaturan")
-    st.caption("Fitur turunan & default dihasilkan otomatis di backend.")
     st.markdown("---")
     st.markdown(
         """
@@ -100,7 +99,7 @@ with st.sidebar:
 #Form
 st.markdown("#### Input Semua Kolom yang Tersedia")
 
-with st.form("lite_form"):
+with st.form("form"):
     c1, c2, c3, out = st.columns([1, 1, 1, 1.25])
 
     with c1:
@@ -156,7 +155,7 @@ with st.form("lite_form"):
             api = (float(f["subtotal"]) / max(int(f["total_items"]), 1)) if int(f["total_items"]) > 0 else 0.0
 
             st.markdown("<hr/>", unsafe_allow_html=True)
-            st.caption("**Ringkasan operasional (turunan dari input):**")
+            st.caption("**Ringkasan operasional:**")
             st.markdown(
                 f"""
                 • **Available partners**: {available}  
@@ -167,7 +166,6 @@ with st.form("lite_form"):
                 • **Created (H, DOW)**: {f["created_hour"]}, {f["created_dayofweek"]}
                 """
             )
-            st.caption("Angka-angka di atas hanya visualisasi; pipeline tetap memakai input Lite.")
         st.markdown("</div>", unsafe_allow_html=True)
 
 #footer
